@@ -1,8 +1,6 @@
 const express = require('express');
 const { body, query, validationResult } = require('express-validator');
-const ServiceRequest = require('../models/ServiceRequest');
-const Material = require('../models/Material');
-const Vehicle = require('../models/Vehicle');
+const { ServiceRequest, Material, Vehicle, Partner } = require('../models');
 const auth = require('../middleware/auth');
 const sendEmail = require('../utils/sendEmail');
 
@@ -55,7 +53,7 @@ router.post('/', auth, [
       }
 
       // Check if material exists and is available
-      const material = await Material.findById(materialId);
+      const material = await Material.findByPk(materialId);
       if (!material || !material.isAvailable) {
         return res.status(400).json({
           success: false,
@@ -79,8 +77,8 @@ router.post('/', auth, [
       }
 
       // Check if vehicle exists and is available
-      const vehicle = await Vehicle.findById(vehicleId);
-      if (!vehicle || !vehicle.availability.isAvailable || vehicle.status !== 'active') {
+      const vehicle = await Vehicle.findByPk(vehicleId);
+      if (!vehicle || vehicle.status !== 'active') {
         return res.status(400).json({
           success: false,
           message: 'Vehicle not found or not available'
@@ -90,7 +88,7 @@ router.post('/', auth, [
 
     // Create service request
     const serviceRequestData = {
-      user: req.user.id,
+      userId: req.user.id,
       type,
       totalPrice,
       requiredDate,
@@ -101,22 +99,24 @@ router.post('/', auth, [
     };
 
     if (type === 'material') {
-      serviceRequestData.material = materialId;
+      serviceRequestData.materialId = materialId;
       serviceRequestData.quantity = quantity;
     } else {
-      serviceRequestData.vehicle = vehicleId;
+      serviceRequestData.vehicleId = vehicleId;
       serviceRequestData.duration = duration;
       serviceRequestData.durationType = durationType;
     }
 
     const serviceRequest = await ServiceRequest.create(serviceRequestData);
     
-    // Populate the request with item details
-    await serviceRequest.populate([
-      { path: 'user', select: 'name email phone' },
-      { path: 'material', select: 'name pricePerUnit unit supplier' },
-      { path: 'vehicle', select: 'name pricePerHour pricePerDay owner' }
-    ]);
+    // Reload with associations
+    const populatedRequest = await ServiceRequest.findByPk(serviceRequest.id, {
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'name', 'email', 'phone'] },
+        { model: Material, as: 'material', attributes: ['name', 'pricePerUnit', 'unit'] },
+        { model: Vehicle, as: 'vehicle', attributes: ['name', 'pricePerHour', 'pricePerDay'] }
+      ]
+    });
 
     // Send confirmation email to user
     try {
@@ -139,7 +139,7 @@ router.post('/', auth, [
     res.status(201).json({
       success: true,
       message: 'Service request created successfully',
-      data: serviceRequest
+      data: populatedRequest
     });
   } catch (error) {
     console.error('Create service request error:', error);

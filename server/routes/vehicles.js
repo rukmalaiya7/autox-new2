@@ -1,6 +1,6 @@
 const express = require('express');
 const { body, query, validationResult } = require('express-validator');
-const Vehicle = require('../models/Vehicle');
+const { Vehicle, Partner } = require('../models');
 const auth = require('../middleware/auth');
 const partnerAuth = require('../middleware/partnerAuth');
 
@@ -33,22 +33,21 @@ router.get('/', [
 
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+    const offset = (page - 1) * limit;
 
     // Build filter object
-    const filter = { 
-      'availability.isAvailable': true,
+    const where = { 
       status: 'active'
     };
 
     if (req.query.category) {
-      filter.category = req.query.category;
+      where.category = req.query.category;
     }
 
     if (req.query.minPriceHour || req.query.maxPriceHour) {
-      filter.pricePerHour = {};
-      if (req.query.minPriceHour) filter.pricePerHour.$gte = parseFloat(req.query.minPriceHour);
-      if (req.query.maxPriceHour) filter.pricePerHour.$lte = parseFloat(req.query.maxPriceHour);
+      where.pricePerHour = {};
+      if (req.query.minPriceHour) where.pricePerHour[Op.gte] = parseFloat(req.query.minPriceHour);
+      if (req.query.maxPriceHour) where.pricePerHour[Op.lte] = parseFloat(req.query.maxPriceHour);
     }
 
     if (req.query.minPriceDay || req.query.maxPriceDay) {
@@ -66,17 +65,17 @@ router.get('/', [
     }
 
     if (req.query.search) {
-      filter.$text = { $search: req.query.search };
+      where.name = { [Op.like]: `%${req.query.search}%` };
     }
 
-    // Build sort object
-    let sort = {};
+    // Build order array
+    let order = [];
     switch (req.query.sort) {
       case 'price_hour_asc':
-        sort = { pricePerHour: 1 };
+        order = [['pricePerHour', 'ASC']];
         break;
       case 'price_hour_desc':
-        sort = { pricePerHour: -1 };
+        order = [['pricePerHour', 'DESC']];
         break;
       case 'price_day_asc':
         sort = { pricePerDay: 1 };
@@ -85,22 +84,29 @@ router.get('/', [
         sort = { pricePerDay: -1 };
         break;
       case 'rating':
-        sort = { 'rating.average': -1 };
+        order = [['rating', 'DESC']];
         break;
       case 'newest':
-        sort = { createdAt: -1 };
+        order = [['createdAt', 'DESC']];
         break;
       default:
-        sort = { featured: -1, 'rating.average': -1 };
+        order = [['featured', 'DESC'], ['rating', 'DESC']];
     }
 
-    const vehicles = await Vehicle.find(filter)
-      .populate('owner', 'businessName rating contact')
-      .sort(sort)
-      .skip(skip)
-      .limit(limit);
+    const { count, rows: vehicles } = await Vehicle.findAndCountAll({
+      where,
+      include: [
+        {
+          model: Partner,
+          as: 'owner',
+          attributes: ['businessName', 'rating', 'contact']
+        }
+      ],
+      order,
+      offset,
+      limit
+    });
 
-    const total = await Vehicle.countDocuments(filter);
 
     res.json({
       success: true,
@@ -108,8 +114,8 @@ router.get('/', [
       pagination: {
         page,
         limit,
-        total,
-        pages: Math.ceil(total / limit)
+        total: count,
+        pages: Math.ceil(count / limit)
       }
     });
   } catch (error) {
